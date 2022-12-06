@@ -1,0 +1,30 @@
+services:
+  bot:
+    build: .
+    scale: 1
+    environment:
+      - BOX_ID=${BOX_ID}
+      - BOX_NAME=${BOX_NAME}
+      - USERNAME=${USERNAME}
+      - PASSWORD=${PASSWORD}
+      - PICKLE_FILEPATH=${PICKLE_FILEPATH}
+      - TELEGRAM_TOKEN=${TELEGRAM_TOKEN}
+      - TELEGRAM_OWNER_ID=${TELEGRAM_OWNER_ID}
+    ports:
+      - 5000
+    volumes:
+      - ./data:/code/src/data
+    deploy:
+      restart_policy:
+        condition: on-failure
+        max_attempts: 3
+    resources:
+      requests:
+        memory: 32Mi
+      limits:
+        memory: 128Mi
+
+volumes:
+  bot:
+    driver_opts:
+      size: 128Ki

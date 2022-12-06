@@ -1,81 +1,56 @@
 import os
-from typing import Any
-from requests import Session, Response, HTTPError
-from bs4 import BeautifulSoup
-from http import HTTPStatus
+import logging
 from dotenv import load_dotenv
-from .error import TooManyAttemptsError, UnknownError, AimharderError, AimharderResponseError
-from .utils import read_file, write_file
+from .aimharder_client import AimharderClient
+from .error import AimharderResponseError
+from .training import Training
+from .utils import read_file, write_file, empty_file
 
-load_dotenv()
-
-MESSAGE_LOGIN_ERRORS = 'loginErrors'
-MESSAGE_UNKNOWN = "Unknown error"
-MESSAGE_TOO_MANY_ATTEMPTS = "Unknown error"
-
-LOGIN_URL = f'https://aimharder.com/login'
-API_DOMAIN = f'https://{os.getenv("BOX_NAME")}.aimharder.com'
-GET_BOOKINGS_URL = f'{API_DOMAIN}/api/bookings'
-BOOK_URL = f'{API_DOMAIN}/api/book'
-CANCEL_BOOK_URL = f'{API_DOMAIN}/api/cancelBook'
-SESSION_FILEPATH = f'{os.getenv("PICKLE_FILEPATH")}/aimharder_session.pickle'
-
-
-def handler_response(response, action) -> dict[str, Any]:
-    try:
-        response.raise_for_status()
-        response = response.json()
-        if 'bookState' in response and response['bookState'] == 1:
-            if 'id' in response:
-                return {'booking_id': response['id']}
-            else:
-                return {'cancel': True}
-        elif 'bookState' in response and 'errorMssg' in response:
-            raise AimharderResponseError(action, response['bookState'], response['errorMssg'], response)
-        else:
-            raise AimharderResponseError(action, response['bookState'], 'unknown', response)
-    except HTTPError as error:
-        raise AimharderError(str(error))
+BOOKING_FILEPATH = f'{os.getenv("PICKLE_FILEPATH")}/aimharder_booking.pickle'
 
 
 class Aimharder:
 
-    def __init__(self, email: str, password: str):
-        self.box_id = os.getenv('BOX_ID')
-        self.session = read_file(SESSION_FILEPATH, email)
+    logger = logging.getLogger(__name__)
 
-        if self.session is None:
-            self.session = self.__login(email, password)
-            write_file(SESSION_FILEPATH, {email: self.session})
+    def __init__(self):
+        load_dotenv()
+        self.aimharder_client = AimharderClient(os.getenv('USERNAME'), os.getenv('PASSWORD'))
+        self.trainings = []
+        self.booked_training = read_file(BOOKING_FILEPATH)
+        if self.booked_training is not None:
+            self.logger.info('Recovered training(%s) booked for %s of the date %s with booking_id %s', self.booked_training.id, self.booked_training.class_name, self.booked_training.date, self.booked_training.booking_id)
 
-    @staticmethod
-    def __validate_login(response: Response) -> None:
-        soup = BeautifulSoup(response.content, "html.parser").find(id=MESSAGE_LOGIN_ERRORS)
-        if soup is not None:
-            if MESSAGE_TOO_MANY_ATTEMPTS in soup.text:
-                raise TooManyAttemptsError()
-            elif MESSAGE_UNKNOWN in soup.text:
-                raise UnknownError()
+    def list_trainings_by_date(self, date) -> [Training]:
+        bookings = self.aimharder_client.get_bookings(date)
+        self.logger.info('Obtained a list of %s trainings by day %s', len(bookings), date)
+        self.trainings = list(map(lambda booking: Training(booking, date), bookings))
+        return self.trainings
 
-    @staticmethod
-    def __login(email: str, password: str) -> Session:
-        session = Session()
-        payload = {'login': 'Iniciar sesión', 'loginiframe': 0, "mail": email, "pw": password}
-        response = session.post(LOGIN_URL, data=payload)
-        Aimharder.__validate_login(response)
-        return session
+    def book_training(self, training_id) -> bool:
+        try:
+            [selected_training] = list(filter(lambda training: training.id == training_id, self.trainings))
+            response_booking = self.aimharder_client.book(selected_training.id, selected_training.date)
+            selected_training.booking_id = response_booking['booking_id']
+            self.booked_training = selected_training
+            self.logger.info('Training(%s) %s booked for the date %s by booking_id %s', training_id, self.booked_training.class_name, self.booked_training.date, self.booked_training.booking_id)
+            write_file(BOOKING_FILEPATH, self.booked_training)
+            self.logger.info('Saved training %s by booking_id %s', training_id, self.booked_training.booking_id)
+            return True
+        except AimharderResponseError as error:
+            self.logger.error('Couldn\'t book training by training_id %s: %s', training_id, error)
+            return False
 
-    def get_bookings(self, date: str) -> [dict]:
-        params = {"box": self.box_id, "day": date, "familyId": ""}
-        response = self.session.get(GET_BOOKINGS_URL, params=params)
-        return response.json()['bookings'] if response.status_code == HTTPStatus.OK else []
-
-    def book(self, booking_id: int, booking_date: str) -> dict[str, Any]:
-        payload = {"id": booking_id, "day": booking_date, "insist": 0, "familyId": ''}
-        response = self.session.post(BOOK_URL, data=payload)
-        return handler_response(response, 'book')
-
-    def cancel_booking(self, booking_id: int) -> dict[str, Any]:
-        payload = {'id': booking_id, 'late': 0, 'familyId': ''}
-        response = self.session.post(CANCEL_BOOK_URL, data=payload)
-        return handler_response(response, 'cancel_booking')
+    def cancel_training(self) -> bool:
+        try:
+            response_booking = self.aimharder_client.cancel_booking(self.booked_training.booking_id)
+            is_cancelled = response_booking['cancel']
+            if is_cancelled:
+                self.logger.info('Cancelled training %s by booking_id %s', self.booked_training.id, self.booked_training.booking_id)
+                self.booked_training = None
+                empty_file(BOOKING_FILEPATH)
+                self.logger.info('Deleted training %s by booking_id %s', self.booked_training.id, self.booked_training.booking_id)
+            return is_cancelled
+        except AimharderResponseError as error:
+            self.logger.error('Couldn\'t cancel the training by training_id %s: %s', self.booked_training.booking_id, error)
+            return False

@@ -14,4 +14,4 @@ COPY . .
 
 EXPOSE 5000
 
-CMD ["python3.10", "aimharder_bot.py"]
+CMD ["python3.10", "main.py"]

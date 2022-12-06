@@ -2,11 +2,15 @@ import os
 import logging
 from dotenv import load_dotenv
 from datetime import date, timedelta
+from warnings import filterwarnings
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CallbackContext, CommandHandler, CallbackQueryHandler, ConversationHandler
-from src.app import App
+from telegram.warnings import PTBUserWarning
+from src.aimharder import Aimharder
+
 
 load_dotenv()
+filterwarnings(action="ignore", message=r".*CallbackQueryHandler", category=PTBUserWarning)
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 CLASS_TYPE, HOUR, BOOK, END = range(4)
 
@@ -46,26 +50,28 @@ def build_inline_buttons_by_hours(class_names):
 
 
 class AimharderBot:
+
     logger = logging.getLogger(__name__)
 
-    def __init__(self, app: App):
+    def __init__(self, app: Aimharder):
         self.app = app
 
     async def start(self, update: Update, context: CallbackContext) -> int:
         user = update.message.from_user
+        self.logger.debug("User %s started the conversation", user.first_name)
         if is_owner(user.id):
             if self.app.booked_training is None:
-                self.logger.info("User %s started the conversation.", user.first_name)
                 keyboard = build_inline_buttons_by_days(get_days_options())
                 reply_markup = InlineKeyboardMarkup([keyboard])
                 await update.message.reply_text("Hi! Choose a date", reply_markup=reply_markup)
                 return CLASS_TYPE
             else:
                 await update.message.reply_text(f'You have already booked a training: {self.app.booked_training}')
-                return END
+                return ConversationHandler.END
         else:
+            self.logger.info("User %s is not the owner.", user.first_name)
             await update.message.reply_text("Bye Bye")
-            return END
+            return ConversationHandler.END
 
     async def select_class_name(self, update: Update, context: CallbackContext) -> int:
         query = update.callback_query
@@ -82,15 +88,19 @@ class AimharderBot:
             return HOUR
         else:
             await query.edit_message_text("No there trainings")
-            return END
+            return ConversationHandler.END
 
     async def select_hour(self, update: Update, context: CallbackContext):
 
-        """Show new choice of buttons"""
         query = update.callback_query
         await query.answer()
 
         class_type = query.data
+
+        if END == class_type:
+            await query.edit_message_text(text="See you next time!")
+            return ConversationHandler.END
+
         class_by_name = filter(lambda training: training.class_name == class_type, self.app.trainings)
         keyboard = build_inline_buttons_by_hours(class_by_name)
         reply_markup = InlineKeyboardMarkup(keyboard)
@@ -105,7 +115,7 @@ class AimharderBot:
         training_id = query.data
 
         if END == int(training_id):
-            await query.edit_message_text(text="Chao!")
+            await query.edit_message_text(text="See you next time!")
         else:
             is_booked_training = self.app.book_training(training_id)
             if is_booked_training:
@@ -113,7 +123,7 @@ class AimharderBot:
             else:
                 reply_message = f'⚠️The training wasn\'t booked ⚠️'
             await query.edit_message_text(reply_message)
-        return END
+        return ConversationHandler.END
 
     async def end(self, update: Update, context: CallbackContext) -> int:
         query = update.callback_query
@@ -134,9 +144,11 @@ class AimharderBot:
 
 
 if __name__ == '__main__':
+    logger = logging.getLogger(__name__)
+    logger.info('Starting up telegram bot...')
 
     application = ApplicationBuilder().token(os.getenv('TELEGRAM_TOKEN')).build()
-    aimharder_bot = AimharderBot(App())
+    aimharder_bot = AimharderBot(Aimharder())
 
     booked_training_handler = CommandHandler('bookedtraining', aimharder_bot.booked_training_handler)
     cancel_handler = CommandHandler('canceltraining', aimharder_bot.cancel_booking_handler)
@@ -149,7 +161,7 @@ if __name__ == '__main__':
             BOOK: [CallbackQueryHandler(aimharder_bot.book_class)],
             END: [CallbackQueryHandler(aimharder_bot.end, pattern=f'^{str(END)}$')],
         },
-        fallbacks=[CommandHandler("booktraining", aimharder_bot.start)],
+        fallbacks=[CommandHandler("booktraining", aimharder_bot.start)]
     )
 
     application.add_handler(book_training_handler)
