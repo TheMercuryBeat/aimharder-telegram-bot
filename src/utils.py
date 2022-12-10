@@ -1,9 +1,23 @@
+import os
 import pickle
+from pathlib import Path
+from dotenv import load_dotenv
+
+load_dotenv()
 
 
-def write_file(path, data) -> bool:
+def __create_path():
+    Path(os.getenv("PICKLE_FILEPATH")).mkdir(parents=True, exist_ok=True)
+
+
+def __get_filename_path(filename):
+    return f'{os.getenv("PICKLE_FILEPATH")}/{filename}'
+
+
+def write_file(filename, data) -> bool:
     try:
-        with open(path, 'wb') as file:
+        __create_path()
+        with open(__get_filename_path(filename), 'wb') as file:
             pickle.dump(data, file, pickle.HIGHEST_PROTOCOL)
     except IOError:
         return False
@@ -11,9 +25,9 @@ def write_file(path, data) -> bool:
         return True
 
 
-def read_file(path, key=None) -> object:
+def read_file(filename, key=None) -> object:
     try:
-        with open(path, 'rb') as file:
+        with open(__get_filename_path(filename), 'rb') as file:
             data = pickle.load(file)
             if key is None:
                 return data
@@ -23,9 +37,9 @@ def read_file(path, key=None) -> object:
         return None
 
 
-def empty_file(path) -> bool:
+def empty_file(filename) -> bool:
     try:
-        open(path, 'w').close()
+        open(__get_filename_path(filename), 'w').close()
     except IOError:
         return False
     else:

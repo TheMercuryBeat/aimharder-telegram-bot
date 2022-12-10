@@ -10,7 +10,8 @@ WORKDIR /code
 COPY requirements.txt .
 RUN python3.10 -m pip install --no-cache-dir --upgrade pip setuptools wheel
 RUN python3.10 -m pip install --no-cache-dir -r requirements.txt
-COPY . .
+COPY main.py .
+COPY src src
 
 EXPOSE 5000
 

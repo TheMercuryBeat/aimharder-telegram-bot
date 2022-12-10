@@ -20,14 +20,13 @@ API_DOMAIN = f'https://{os.getenv("BOX_NAME")}.aimharder.com'
 GET_BOOKINGS_URL = f'{API_DOMAIN}/api/bookings'
 BOOK_URL = f'{API_DOMAIN}/api/book'
 CANCEL_BOOK_URL = f'{API_DOMAIN}/api/cancelBook'
-SESSION_FILEPATH = f'{os.getenv("PICKLE_FILEPATH")}/aimharder_session.pickle'
+SESSION_FILENAME = 'aimharder_session.pickle'
 
 
 def handler_response(response, action) -> dict[str, Any]:
     try:
         response.raise_for_status()
         response = response.json()
-        logger.debug('Received response %s', response)
         if 'bookState' in response and response['bookState'] == 1:
             if 'id' in response:
                 return {'booking_id': response['id']}
@@ -46,12 +45,12 @@ class AimharderClient:
 
     def __init__(self, email: str, password: str):
         self.box_id = os.getenv('BOX_ID')
-        self.session = read_file(SESSION_FILEPATH, email)
+        self.session = read_file(SESSION_FILENAME, email)
 
         if self.session is None:
             logger.info('No found session by %s user', email)
             self.session = self.__login(email, password)
-            write_file(SESSION_FILEPATH, {email: self.session})
+            write_file(SESSION_FILENAME, {email: self.session})
             logger.info('Saved session by %s user', email)
         else:
             logger.info('Found session by %s user', email)
@@ -79,15 +78,18 @@ class AimharderClient:
     def get_bookings(self, date: str) -> [dict]:
         params = {"box": self.box_id, "day": date, "familyId": ""}
         response = self.session.get(GET_BOOKINGS_URL, params=params)
+        logger.debug('Obtained bookings: %s', response)
         bookings = response.json()['bookings'] if response.status_code == HTTPStatus.OK else []
         return bookings
 
     def book(self, booking_id: int, booking_date: str) -> dict[str, Any]:
         payload = {"id": booking_id, "day": booking_date, "insist": 0, "familyId": ''}
         response = self.session.post(BOOK_URL, data=payload)
+        logger.debug('Booked class: %s', response)
         return handler_response(response, 'book')
 
     def cancel_booking(self, booking_id: int) -> dict[str, Any]:
         payload = {'id': booking_id, 'late': 0, 'familyId': ''}
         response = self.session.post(CANCEL_BOOK_URL, data=payload)
+        logger.debug('Cancelled booking: %s', response)
         return handler_response(response, 'cancel_booking')
